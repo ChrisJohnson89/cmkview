@@ -1,8 +1,18 @@
 # cmkview
 
-A lightweight macOS app that monitors a [CheckMK](https://checkmk.com/) server and displays current problems in a grouped incident dashboard.
+A lightweight macOS app for monitoring [CheckMK](https://checkmk.com/) servers. Problems are grouped by category, filterable by severity, and updated live — giving you an at-a-glance incident dashboard without leaving your desktop.
 
-Built from scratch — single backend (CheckMK), native macOS app, minimal dependencies. No custom CheckMK views required.
+No custom CheckMK views required. No API keys. Just a regular CheckMK login.
+
+## Features
+
+- **Grouped incident dashboard** — problems organized by category (memory, disk, network, hardware, services, system)
+- **Severity filters** — click DOWN / CRIT / WARN / UNKN badges to toggle visibility
+- **Hide acknowledged** — one-click toggle to filter out acked problems
+- **Collapse / expand** — drill into groups → hosts → individual services
+- **Menu bar indicator** — shows ✓ when clear, ⚠ N when problems exist
+- **First-launch setup** — connect to your CheckMK server through a simple login screen
+- **Auto-refresh** — polls at a configurable interval, UI state persists across refreshes
 
 ## Requirements
 
@@ -10,9 +20,21 @@ Built from scratch — single backend (CheckMK), native macOS app, minimal depen
 - Python 3.11+
 - A CheckMK user account (any user that can see problems in the web UI)
 
+## Quick start
+
+```bash
+git clone https://github.com/ChrisJohnson89/cmkview.git
+cd cmkview
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python cmkview.py
+```
+
+On first launch you'll see a setup screen — enter your CheckMK URL, username, and password. Config is saved to `~/.cmkview.toml`.
+
 ## Configuration
 
-Create `~/.cmkview.toml`:
+`~/.cmkview.toml` is created automatically by the setup screen, or you can write it by hand:
 
 ```toml
 url = "https://mon.example.com/mysite"
@@ -28,13 +50,6 @@ interval = 60
 | `password` | yes      |         | CheckMK password                     |
 | `interval` | no       | 60      | Poll interval in seconds             |
 
-## Run from source
-
-```bash
-pip install -r requirements.txt
-python cmkview.py
-```
-
 ## Build the .app
 
 ```bash
@@ -47,10 +62,15 @@ The app bundle is created at `dist/cmkview.app`. Drag it to `/Applications` and 
 ## How it works
 
 1. Logs into CheckMK via cookie auth (`/check_mk/login.py`)
-2. Polls the built-in `hostproblems` and `svcproblems` Multisite views at the configured interval
-3. Displays a problem count in the menu bar (✓ when clear, ⚠ N when problems exist)
-4. Opens a dashboard window with problems grouped by category (memory, disk, network, services, etc.)
-5. Click state badges (DOWN/CRIT/WARN/UNKN) to filter by severity, toggle Hide Ack to filter acknowledged problems
+2. Polls the built-in `hostproblems` and `svcproblems` Multisite views
+3. Categorizes and groups problems, cleans up noisy status text
+4. Renders a grouped incident view in a native macOS window via WKWebView
+
+## Stack
+
+- **PyObjC** (AppKit + WebKit) — native macOS window, menu bar, WKWebView
+- **requests** — CheckMK HTTP polling
+- **tomllib** — config parsing (stdlib, Python 3.11+)
 
 ## License
 

@@ -1,25 +1,45 @@
 # cmkview
 
-macOS app for monitoring a CheckMK server. A lightweight, CheckMK-focused alternative to Nagstamon.
+macOS app for monitoring CheckMK servers. Lightweight, single-backend alternative focused solely on CheckMK.
 
 ## Stack
 
-- **PyObjC** (AppKit + WebKit) — native macOS window, menu bar icon, WKWebView dashboard
+- **PyObjC** (AppKit + WebKit) — native macOS window, menu bar icon, WKWebView for dashboard and setup
 - **requests** — HTTP session for CheckMK polling
 - **tomllib** (stdlib, Python 3.11+) — config parsing
+
+## Architecture
+
+- `cmkview.py` — main app: AppDelegate, window management, setup/dashboard modes, grouped payload builder
+- `checkmk.py` — CheckMK client: cookie auth, view polling, service categorization, status text cleanup
+- `config.py` — load/save `~/.cmkview.toml`
+- `popup.html` — dashboard UI: grouped incident view, severity filters, ack toggle, collapse/expand
+- `setup.html` — first-launch login form, tests credentials before saving
 
 ## CheckMK integration
 
 - Cookie-based auth: `POST /check_mk/login.py` with `_username`, `_password`, `_login=1`
 - Poll two built-in Multisite views with `output_format=python`:
-  - `view.py?view_name=hostproblems` — host problems
-  - `view.py?view_name=svcproblems` — service problems
+  - `view.py?view_name=hostproblems` — DOWN/UNREACHABLE hosts
+  - `view.py?view_name=svcproblems` — CRIT/WARN/UNKNOWN services
 - No REST API key needed — regular user login
 - No custom views required — uses CheckMK's built-in views
 
+## UI behaviour
+
+- First launch (no config) → setup screen with URL/username/password form
+- After connect → grouped incident dashboard
+- Menu bar icon: ✓ when clear, ⚠ N when problems exist
+- Problems grouped by category (memory, disk, network, hardware, services, system)
+- DOWN hosts get their own top-level group
+- Clickable state badges (DOWN/CRIT/WARN/UNKN) to filter severity
+- Hide Ack toggle, Collapse All / Expand All
+- UI state (filters, collapsed groups, expanded hosts) persists across poll refreshes
+- Data pushed via JS evaluation — HTML loaded once, not reloaded on each poll
+
 ## Config
 
-Single file at `~/.cmkview.toml`:
+`~/.cmkview.toml` — created by setup screen or manually:
 
 ```toml
 url = "https://mon.example.com/mysite"
@@ -27,16 +47,6 @@ username = "myuser"
 password = "mypassword"
 interval = 60
 ```
-
-## UI behaviour
-
-- Menu bar icon shows problem count (✓ when clear, ⚠ N when issues exist)
-- Full app window with grouped incident dashboard
-- Problems grouped by category (memory, disk, network, hardware, services, system)
-- Clickable state badges (DOWN/CRIT/WARN/UNKN) to filter by severity
-- Hide Ack toggle to filter acknowledged problems
-- Expand groups → hosts → individual services
-- UI state (collapsed groups, filters) persists across poll refreshes
 
 ## Packaging
 
@@ -48,4 +58,4 @@ interval = 60
 - No Qt / PyQt
 - No other monitoring backends
 - No cross-platform support
-- No sound alerts, RDP/VNC launchers, or settings GUI
+- No sound alerts, RDP/VNC launchers, or settings GUI (yet)
