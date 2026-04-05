@@ -366,6 +366,7 @@ function redraw() {
       <span class="brand">cmkview</span>
       <div class="filters">
         <button class="filter-btn${hideAcked ? ' active' : ''}" id="btn-ack">Hide Ack</button>
+        <button class="filter-btn" id="btn-collapse">Collapse All</button>
       </div>
     </div>
     <span class="summary">
@@ -393,6 +394,27 @@ function redraw() {
     e.stopPropagation();
     hideAcked = !hideAcked;
     redraw();
+  });
+
+  // Collapse/Expand all
+  document.getElementById('btn-collapse').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const groups = app.querySelectorAll('.group');
+    const anyOpen = Array.from(groups).some(g => g.classList.contains('open'));
+    if (anyOpen) {
+      // Collapse all groups and hosts
+      groups.forEach(g => g.classList.remove('open'));
+      app.querySelectorAll('.host-row').forEach(h => h.classList.remove('expanded'));
+      // Sync state
+      groups.forEach(g => { if (g.dataset.gid) closedGroups[g.dataset.gid] = true; });
+      expandedHosts = {};
+      e.target.textContent = 'Expand All';
+    } else {
+      // Expand all groups
+      groups.forEach(g => g.classList.add('open'));
+      closedGroups = {};
+      e.target.textContent = 'Collapse All';
+    }
   });
 
   // State badge toggle handlers
