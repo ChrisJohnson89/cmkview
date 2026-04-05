@@ -15,7 +15,10 @@ import checkmk
 import config
 
 
-POPUP_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "popup.html")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+POPUP_HTML_PATH = os.path.join(BASE_DIR, "popup.html")
+SETUP_HTML_PATH = os.path.join(BASE_DIR, "setup.html")
+
 STATE_PRIORITY = {
     "DOWN": 0,
     "UNREACHABLE": 0,
@@ -46,6 +49,35 @@ CATEGORY_META = {
 }
 
 
+class SetupMessageHandler(AppKit.NSObject):
+    """Receives login form submissions from the setup WebView."""
+
+    _app_delegate = objc.ivar()
+
+    def initWithDelegate_(self, delegate):
+        self = objc.super(SetupMessageHandler, self).init()
+        if self is None:
+            return None
+        self._app_delegate = delegate
+        return self
+
+    def userContentController_didReceiveScriptMessage_(self, controller, message):
+        try:
+            data = json.loads(message.body())
+            url = data.get("url", "").strip()
+            username = data.get("username", "").strip()
+            password = data.get("password", "")
+
+            # Test login in background
+            threading.Thread(
+                target=self._app_delegate._test_and_save_login,
+                args=(url, username, password),
+                daemon=True,
+            ).start()
+        except Exception as e:
+            self._app_delegate._send_setup_result(False, str(e))
+
+
 class AppDelegate(AppKit.NSObject):
     def init(self):
         self = objc.super(AppDelegate, self).init()
@@ -57,18 +89,38 @@ class AppDelegate(AppKit.NSObject):
         self._bar_item = None
         self._cmk_client = None
         self._app_cfg = None
+        self._page_loaded = False
+        self._pending_payload = None
+        self._poll_timer = None
+        self._mode = None  # "setup" or "dashboard"
         return self
 
     def applicationDidFinishLaunching_(self, notification):
-        self._app_cfg = config.load()
-        self._cmk_client = checkmk.CheckMKClient(
-            self._app_cfg["url"], self._app_cfg["username"], self._app_cfg["password"]
-        )
+        # --- App menu bar with Edit menu (enables Cmd+C/V/X/A) ---
+        main_menu = AppKit.NSMenu.alloc().init()
 
+        edit_menu = AppKit.NSMenu.alloc().initWithTitle_("Edit")
+        for title, action, key in [
+            ("Cut", "cut:", "x"),
+            ("Copy", "copy:", "c"),
+            ("Paste", "paste:", "v"),
+            ("Select All", "selectAll:", "a"),
+            ("Undo", "undo:", "z"),
+            ("Redo", "redo:", "Z"),
+        ]:
+            item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, key)
+            edit_menu.addItem_(item)
+
+        edit_item = AppKit.NSMenuItem.alloc().init()
+        edit_item.setSubmenu_(edit_menu)
+        main_menu.addItem_(edit_item)
+        AppKit.NSApp.setMainMenu_(main_menu)
+
+        # --- Menu bar status item ---
         self._bar_item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
             AppKit.NSVariableStatusItemLength
         )
-        self._bar_item.button().setTitle_("cmkview ✓")
+        self._bar_item.button().setTitle_("cmkview")
 
         bar_menu = AppKit.NSMenu.alloc().init()
         for label, sel in [
@@ -84,13 +136,15 @@ class AppDelegate(AppKit.NSObject):
         bar_menu.addItem_(qi)
         self._bar_item.setMenu_(bar_menu)
 
+        # --- Create window ---
         self._setup_main_window()
 
-        interval = self._app_cfg.get("interval", 60)
-        Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            interval, self, self.onPollTimer_, None, True
-        )
-        threading.Thread(target=self._do_poll, daemon=True).start()
+        # --- Decide: setup or dashboard ---
+        self._app_cfg = config.load()
+        if self._app_cfg.get("url") and self._app_cfg.get("username") and self._app_cfg.get("password"):
+            self._start_dashboard()
+        else:
+            self._show_setup()
 
     def _setup_main_window(self):
         screen = AppKit.NSScreen.mainScreen().frame()
@@ -108,43 +162,139 @@ class AppDelegate(AppKit.NSObject):
         self._main_window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             rect, style, AppKit.NSBackingStoreBuffered, False
         )
-        self._main_window.setTitle_("cmkview - CheckMK Monitor")
+        self._main_window.setTitle_("cmkview")
         self._main_window.setMinSize_(Foundation.NSMakeSize(360, 360))
         self._main_window.setReleasedWhenClosed_(False)
 
-        wk_conf = WebKit.WKWebViewConfiguration.alloc().init()
-        content_rect = Foundation.NSMakeRect(0, 0, w, h)
-        self._wk_view = WebKit.WKWebView.alloc().initWithFrame_configuration_(
-            content_rect, wk_conf
-        )
-        self._wk_view.setAutoresizingMask_(
-            AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable
-        )
-
-        # Load HTML once — subsequent updates go via JS
-        self._page_loaded = False
-        self._pending_payload = None
-        self._load_initial_html()
-
-        self._main_window.contentView().addSubview_(self._wk_view)
         self._main_window.makeKeyAndOrderFront_(None)
         AppKit.NSApp.activateIgnoringOtherApps_(True)
 
-    def _load_initial_html(self):
-        """Load the HTML template once into the WebView."""
-        with open(POPUP_HTML_PATH, "r", encoding="utf-8") as f:
+    def _create_webview(self, with_setup_handler=False):
+        """Create a fresh WKWebView, optionally with the setup message handler."""
+        wk_conf = WebKit.WKWebViewConfiguration.alloc().init()
+        if with_setup_handler:
+            handler = SetupMessageHandler.alloc().initWithDelegate_(self)
+            wk_conf.userContentController().addScriptMessageHandler_name_(handler, "cmksetup")
+
+        frame = self._main_window.contentView().bounds()
+        wk_view = WebKit.WKWebView.alloc().initWithFrame_configuration_(frame, wk_conf)
+        wk_view.setAutoresizingMask_(
+            AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable
+        )
+        return wk_view
+
+    def _swap_webview(self, new_view):
+        """Replace the current WebView in the window."""
+        if self._wk_view:
+            self._wk_view.removeFromSuperview()
+        self._wk_view = new_view
+        self._main_window.contentView().addSubview_(self._wk_view)
+
+    # ── Setup flow ──
+
+    def _show_setup(self):
+        self._mode = "setup"
+        self._page_loaded = False
+        self._main_window.setTitle_("cmkview — Setup")
+        self._bar_item.button().setTitle_("cmkview")
+
+        wk_view = self._create_webview(with_setup_handler=True)
+        self._swap_webview(wk_view)
+
+        with open(SETUP_HTML_PATH, "r", encoding="utf-8") as f:
             html = f.read()
-        base_url = Foundation.NSURL.fileURLWithPath_(os.path.dirname(POPUP_HTML_PATH) + "/")
+        base_url = Foundation.NSURL.fileURLWithPath_(BASE_DIR + "/")
         self._wk_view.loadHTMLString_baseURL_(html, base_url)
 
-        # Use a short timer to detect when the page is ready
+    def _test_and_save_login(self, url, username, password):
+        """Test CheckMK login, save config if successful. Runs in background thread."""
+        try:
+            client = checkmk.CheckMKClient(url, username, password)
+            client.login()
+            # Login succeeded — save config
+            config.save(url, username, password)
+            self._app_cfg = config.load()
+            self._send_setup_result(True, "")
+            # Switch to dashboard on main thread
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                self.onSetupComplete_, None, False
+            )
+        except Exception as e:
+            error_msg = str(e)
+            if "Login failed" in error_msg:
+                error_msg = "Invalid username or password"
+            elif "ConnectionError" in type(e).__name__ or "connection" in error_msg.lower():
+                error_msg = "Could not reach server — check the URL"
+            elif "SSLError" in type(e).__name__:
+                error_msg = "SSL certificate error — check the URL"
+            self._send_setup_result(False, error_msg)
+
+    def _send_setup_result(self, success, error):
+        """Send result back to the setup form JS."""
+        result = json.dumps({"success": success, "error": error})
+
+        def do_send():
+            js = f"window.onSetupResult({result})"
+            self._wk_view.evaluateJavaScript_completionHandler_(js, None)
+
+        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+            self.onSendSetupResult_, result, False
+        )
+
+    @objc.typedSelector(b"v@:@")
+    def onSendSetupResult_(self, result_json):
+        js = f"window.onSetupResult({result_json})"
+        self._wk_view.evaluateJavaScript_completionHandler_(js, None)
+
+    @objc.typedSelector(b"v@:@")
+    def onSetupComplete_(self, _obj):
+        """Transition from setup to dashboard after successful login."""
+        # Small delay so user sees "Connected!" message
+        Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0, self, self.onStartDashboardTimer_, None, False
+        )
+
+    @objc.typedSelector(b"v@:@")
+    def onStartDashboardTimer_(self, timer):
+        self._start_dashboard()
+
+    # ── Dashboard flow ──
+
+    def _start_dashboard(self):
+        self._mode = "dashboard"
+        self._page_loaded = False
+        self._pending_payload = None
+        self._main_window.setTitle_("cmkview — CheckMK Monitor")
+
+        self._cmk_client = checkmk.CheckMKClient(
+            self._app_cfg["url"], self._app_cfg["username"], self._app_cfg["password"]
+        )
+
+        wk_view = self._create_webview(with_setup_handler=False)
+        self._swap_webview(wk_view)
+
+        # Load dashboard HTML
+        with open(POPUP_HTML_PATH, "r", encoding="utf-8") as f:
+            html = f.read()
+        base_url = Foundation.NSURL.fileURLWithPath_(BASE_DIR + "/")
+        self._wk_view.loadHTMLString_baseURL_(html, base_url)
+
+        # Wait for page ready
         Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.3, self, self.checkPageReady_, None, True
         )
 
+        # Start poll timer
+        if self._poll_timer:
+            self._poll_timer.invalidate()
+        interval = self._app_cfg.get("interval", 60)
+        self._poll_timer = Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            interval, self, self.onPollTimer_, None, True
+        )
+        threading.Thread(target=self._do_poll, daemon=True).start()
+
     @objc.typedSelector(b"v@:@")
     def checkPageReady_(self, timer):
-        """Poll until the page has loaded and updateProblems is defined."""
         def callback(result, error):
             if result and not self._page_loaded:
                 self._page_loaded = True
@@ -156,10 +306,11 @@ class AppDelegate(AppKit.NSObject):
         )
 
     def _push_payload(self, payload):
-        """Send data to the WebView via JS — preserves UI state."""
         data_json = json.dumps(payload).replace("</", "<\\/")
         js = f"updateProblems({data_json})"
         self._wk_view.evaluateJavaScript_completionHandler_(js, None)
+
+    # ── Menu actions ──
 
     @objc.typedSelector(b"v@:@")
     def cmdShowDash_(self, sender):
@@ -168,7 +319,8 @@ class AppDelegate(AppKit.NSObject):
 
     @objc.typedSelector(b"v@:@")
     def cmdRefresh_(self, sender):
-        threading.Thread(target=self._do_poll, daemon=True).start()
+        if self._mode == "dashboard":
+            threading.Thread(target=self._do_poll, daemon=True).start()
 
     @objc.typedSelector(b"v@:@")
     def cmdQuit_(self, sender):
@@ -177,6 +329,8 @@ class AppDelegate(AppKit.NSObject):
     @objc.typedSelector(b"v@:@")
     def onPollTimer_(self, timer):
         threading.Thread(target=self._do_poll, daemon=True).start()
+
+    # ── Polling ──
 
     def _do_poll(self):
         try:
@@ -217,7 +371,6 @@ def build_popup_payload(problems: list[dict]) -> dict:
         state = problem.get("state") or "UNKNOWN"
         badge = STATE_BADGES.get(state, state[:4].upper())
 
-        # DOWN/UNREACHABLE hosts get their own top-level group
         if state in ("DOWN", "UNREACHABLE"):
             category = "host-down"
 

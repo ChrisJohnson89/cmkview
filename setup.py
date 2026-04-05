@@ -3,7 +3,7 @@
 from setuptools import setup
 
 APP = ["cmkview.py"]
-DATA_FILES = [("", ["popup.html"])]
+DATA_FILES = [("", ["popup.html", "setup.html"])]
 
 OPTIONS = {
     "argv_emulation": False,

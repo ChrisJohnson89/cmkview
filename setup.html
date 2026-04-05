@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #111113;
+    --surface: #1a1a1e;
+    --surface2: #222228;
+    --border: #2a2a30;
+    --text: #e0e0e4;
+    --text-dim: #888890;
+    --accent: #4a9eff;
+    --accent-hover: #6ab4ff;
+    --error: #ff6b6b;
+    --success: #6b6;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    font-size: 14px;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+  }
+
+  .setup-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 40px;
+    width: 380px;
+  }
+
+  .logo {
+    text-align: center;
+    margin-bottom: 8px;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }
+
+  .subtitle {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 13px;
+    margin-bottom: 32px;
+  }
+
+  .field {
+    margin-bottom: 16px;
+  }
+
+  .field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .field input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 14px;
+    font-family: "SF Mono", "Menlo", monospace;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .field input:focus {
+    border-color: var(--accent);
+  }
+
+  .field input::placeholder {
+    color: #555;
+  }
+
+  .btn-connect {
+    width: 100%;
+    padding: 12px;
+    margin-top: 8px;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .btn-connect:hover { background: var(--accent-hover); }
+
+  .btn-connect:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .status {
+    text-align: center;
+    margin-top: 16px;
+    font-size: 13px;
+    min-height: 20px;
+  }
+
+  .status.error { color: var(--error); }
+  .status.success { color: var(--success); }
+  .status.loading { color: var(--text-dim); }
+
+  .hint {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 11px;
+    color: #555;
+  }
+</style>
+</head>
+<body>
+<div class="setup-card">
+  <div class="logo">cmkview</div>
+  <div class="subtitle">Connect to your CheckMK server</div>
+
+  <div class="field">
+    <label>Server URL</label>
+    <input type="text" id="url" placeholder="https://mon.example.com/mysite" autofocus>
+  </div>
+
+  <div class="field">
+    <label>Username</label>
+    <input type="text" id="username" placeholder="myuser">
+  </div>
+
+  <div class="field">
+    <label>Password</label>
+    <input type="password" id="password" placeholder="••••••••">
+  </div>
+
+  <button class="btn-connect" id="btn-connect">Connect</button>
+
+  <div class="status" id="status"></div>
+
+  <div class="hint">Config saved to ~/.cmkview.toml</div>
+</div>
+
+<script>
+  const urlInput = document.getElementById('url');
+  const userInput = document.getElementById('username');
+  const passInput = document.getElementById('password');
+  const btn = document.getElementById('btn-connect');
+  const status = document.getElementById('status');
+
+  // Allow Enter to submit
+  [urlInput, userInput, passInput].forEach(input => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') btn.click();
+    });
+  });
+
+  btn.addEventListener('click', () => {
+    const url = urlInput.value.trim();
+    const username = userInput.value.trim();
+    const password = passInput.value;
+
+    if (!url || !username || !password) {
+      status.className = 'status error';
+      status.textContent = 'All fields are required';
+      return;
+    }
+
+    btn.disabled = true;
+    status.className = 'status loading';
+    status.textContent = 'Connecting...';
+
+    // Send to Python via webkit message handler
+    window.webkit.messageHandlers.cmksetup.postMessage(
+      JSON.stringify({ url, username, password })
+    );
+  });
+
+  // Called from Python
+  window.onSetupResult = function(result) {
+    btn.disabled = false;
+    if (result.success) {
+      status.className = 'status success';
+      status.textContent = 'Connected! Loading dashboard...';
+    } else {
+      status.className = 'status error';
+      status.textContent = result.error || 'Connection failed';
+    }
+  };
+</script>
+</body>
+</html>
