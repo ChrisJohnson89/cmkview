@@ -100,7 +100,7 @@
     align-items: center;
   }
 
-  .header .left { display: flex; align-items: center; gap: 14px; }
+  .header .left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
   .header .brand {
     font-weight: 700;
@@ -108,16 +108,20 @@
     letter-spacing: -0.3px;
   }
 
+  @media (max-width: 400px) {
+    .header .brand { display: none; }
+  }
+
   .filters {
     display: flex;
-    gap: 6px;
+    gap: 4px;
   }
 
   .filter-btn {
     font-family: -apple-system, BlinkMacSystemFont, sans-serif;
     font-size: 11px;
     font-weight: 600;
-    padding: 3px 10px;
+    padding: 3px 8px;
     border-radius: 4px;
     border: 1px solid var(--border);
     background: var(--surface2);
@@ -346,6 +350,138 @@
     color: var(--text-dim);
     font-size: 14px;
   }
+
+  /* === Flat table view === */
+  .flat-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 12px;
+  }
+
+  .flat-table th {
+    background: var(--surface2);
+    color: var(--text-dim);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 6px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .flat-table td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+
+  .ft-row:hover { background: var(--surface2); }
+
+  .ft-row-down { border-left: 2px solid var(--down-accent); }
+  .ft-row-crit { border-left: 2px solid var(--crit-accent); }
+  .ft-row-warn { border-left: 2px solid var(--warn-accent); }
+  .ft-row-unkn { border-left: 2px solid var(--unkn-accent); }
+
+  .ft-host-cell {
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 11px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ft-svc-cell {
+    font-weight: 600;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ft-msg-cell {
+    color: var(--text-dim);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ft-dur-cell {
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 10px;
+    white-space: nowrap;
+    color: var(--text-dim);
+    text-align: right;
+  }
+
+
+
+  /* === Options popover === */
+  .opts-wrap {
+    position: relative;
+  }
+
+  .opts-btn {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 13px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.15s;
+    user-select: none;
+    line-height: 1;
+  }
+
+  .opts-btn:hover { border-color: #555; color: var(--text); }
+
+  .opts-popover {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 30;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 0;
+    min-width: 150px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+
+  .opts-popover.open { display: block; }
+
+  .opts-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  .opts-item:hover { background: var(--surface2); }
+
+  .opts-check {
+    font-size: 11px;
+    color: #6b6;
+    width: 16px;
+    text-align: center;
+  }
 </style>
 </head>
 <body>
@@ -362,6 +498,7 @@ let updateBannerDismissed = false;
 const FONT_SIZES = ['size-sm', 'size-md', 'size-lg'];
 const FONT_LABELS = ['Aa-', 'Aa', 'Aa+'];
 let fontSizeIndex = 0; // start at small (13px default with no class = between sm and md)
+let viewMode = 'grouped'; // 'grouped' or 'flat'
 
 function render(data) {
   rawData = data;
@@ -396,6 +533,9 @@ function redraw() {
     if (!data || !data.summary || data.summary.problem_count === 0) {
       app.innerHTML = `${bannerHtml}<div class="ok-message">All clear<div class="sub">No problems detected</div></div>`;
       bindUpdateBannerHandlers();
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.cmkstatus) {
+        window.webkit.messageHandlers.cmkstatus.postMessage(0);
+      }
       return;
     }
   }
@@ -424,9 +564,15 @@ function redraw() {
     <div class="left">
       <span class="brand">cmkview</span>
       <div class="filters">
-        <button class="filter-btn${hideAcked ? ' active' : ''}" id="btn-ack">Hide Ack</button>
-        <button class="filter-btn" id="btn-collapse">Collapse All</button>
-        <button class="filter-btn" id="btn-fontsize">Aa</button>
+        <button class="filter-btn" id="btn-view">${viewMode === 'flat' ? 'Table' : 'Groups'}</button>
+        <div class="opts-wrap">
+          <button class="opts-btn" id="btn-opts">⚙</button>
+          <div class="opts-popover" id="opts-popover">
+            <button class="opts-item" id="btn-ack"><span>Hide Acknowledged</span><span class="opts-check">${hideAcked ? '✓' : ''}</span></button>
+            ${viewMode !== 'flat' ? `<button class="opts-item" id="btn-collapse"><span>${filtered.some(g => !closedGroups[g.id || (g.category + '-' + g.state)]) ? 'Collapse All' : 'Expand All'}</span><span class="opts-check"></span></button>` : ''}
+            <button class="opts-item" id="btn-fontsize"><span>Font Size</span><span class="opts-check">${FONT_LABELS[fontSizeIndex]}</span></button>
+          </div>
+        </div>
       </div>
     </div>
     <span class="summary">
@@ -440,6 +586,8 @@ function redraw() {
 
   if (filtered.length === 0) {
     html += '<div class="empty-filter">All problems filtered out — click badges or Hide Ack to adjust</div>';
+  } else if (viewMode === 'flat') {
+    html += renderFlatTable(filtered);
   } else {
     for (const g of filtered) {
       html += renderGroup(g);
@@ -450,40 +598,61 @@ function redraw() {
   app.innerHTML = html;
   bindUpdateBannerHandlers();
 
-  // Filter button handlers
+  // Update menu bar count (respects hideAcked and state filters)
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.cmkstatus) {
+    window.webkit.messageHandlers.cmkstatus.postMessage(totalProblems);
+  }
+
+  // Options gear popover
+  const optsBtn = document.getElementById('btn-opts');
+  const optsPopover = document.getElementById('opts-popover');
+  optsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    optsPopover.classList.toggle('open');
+  });
+  document.addEventListener('click', () => optsPopover.classList.remove('open'));
+  optsPopover.addEventListener('click', (e) => e.stopPropagation());
+
+  // Hide Ack (inside popover)
   document.getElementById('btn-ack').addEventListener('click', (e) => {
     e.stopPropagation();
     hideAcked = !hideAcked;
     redraw();
   });
 
-  // Collapse/Expand all
-  document.getElementById('btn-collapse').addEventListener('click', (e) => {
-    e.stopPropagation();
-    const groups = app.querySelectorAll('.group');
-    const anyOpen = Array.from(groups).some(g => g.classList.contains('open'));
-    if (anyOpen) {
-      // Collapse all groups and hosts
-      groups.forEach(g => g.classList.remove('open'));
-      app.querySelectorAll('.host-row').forEach(h => h.classList.remove('expanded'));
-      // Sync state
-      groups.forEach(g => { if (g.dataset.gid) closedGroups[g.dataset.gid] = true; });
-      expandedHosts = {};
-      e.target.textContent = 'Expand All';
-    } else {
-      // Expand all groups
-      groups.forEach(g => g.classList.add('open'));
-      closedGroups = {};
-      e.target.textContent = 'Collapse All';
-    }
-  });
+  // Collapse/Expand all (inside popover, only in grouped mode)
+  const collapseBtn = document.getElementById('btn-collapse');
+  if (collapseBtn) {
+    collapseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const groups = app.querySelectorAll('.group');
+      const anyOpen = Array.from(groups).some(g => g.classList.contains('open'));
+      if (anyOpen) {
+        groups.forEach(g => g.classList.remove('open'));
+        app.querySelectorAll('.host-row').forEach(h => h.classList.remove('expanded'));
+        groups.forEach(g => { if (g.dataset.gid) closedGroups[g.dataset.gid] = true; });
+        expandedHosts = {};
+      } else {
+        groups.forEach(g => g.classList.add('open'));
+        closedGroups = {};
+      }
+      redraw();
+    });
+  }
 
-  // Font size toggle
+  // Font size toggle (inside popover)
   document.getElementById('btn-fontsize').addEventListener('click', (e) => {
     e.stopPropagation();
     fontSizeIndex = (fontSizeIndex + 1) % FONT_SIZES.length;
     document.body.className = FONT_SIZES[fontSizeIndex];
-    e.target.textContent = FONT_LABELS[fontSizeIndex];
+    redraw();
+  });
+
+  // View mode toggle
+  document.getElementById('btn-view').addEventListener('click', (e) => {
+    e.stopPropagation();
+    viewMode = viewMode === 'grouped' ? 'flat' : 'grouped';
+    redraw();
   });
 
   // State badge toggle handlers
@@ -618,6 +787,52 @@ function renderGroup(g) {
   }
 
   html += '</div></div>';
+  return html;
+}
+
+function renderFlatTable(groups) {
+  const rows = [];
+  for (const g of groups) {
+    for (const h of g.hosts) {
+      for (const svc of h.items) {
+        rows.push(svc);
+      }
+    }
+  }
+
+  // Severity first (DOWN > CRIT > WARN > UNKN), then oldest first within each
+  const sevOrder = { DOWN: 0, CRIT: 1, WARN: 2, UNKN: 3 };
+  rows.sort((a, b) => {
+    const sa = sevOrder[a.state_badge] ?? 9;
+    const sb = sevOrder[b.state_badge] ?? 9;
+    if (sa !== sb) return sa - sb;
+    return b.duration_seconds - a.duration_seconds;
+  });
+
+  let html = '<table class="flat-table"><thead><tr>';
+  html += '<th style="width:44px">State</th>';
+  html += '<th style="width:22%">Host</th>';
+  html += '<th style="width:18%">Service</th>';
+  html += '<th>Message</th>';
+  html += '<th style="width:52px">Age</th>';
+  html += '</tr></thead><tbody>';
+
+  for (const row of rows) {
+    let flags = '';
+    if (row.acknowledged) flags += '✓';
+    if (row.downtime) flags += '★';
+
+    const sc = row.state_badge.toLowerCase();
+    html += `<tr class="ft-row ft-row-${sc}">`;
+    html += `<td><span class="svc-badge ${row.state_badge}">${row.state_badge}</span></td>`;
+    html += `<td class="ft-host-cell">${esc(row.host)}${flags ? ` <span class="svc-flags">${flags}</span>` : ''}</td>`;
+    html += `<td class="ft-svc-cell">${esc(row.service_label)}</td>`;
+    html += `<td class="ft-msg-cell">${esc(row.message)}</td>`;
+    html += `<td class="ft-dur-cell">${esc(row.duration)}</td>`;
+    html += '</tr>';
+  }
+
+  html += '</tbody></table>';
   return html;
 }
 
