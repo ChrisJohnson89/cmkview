@@ -38,6 +38,10 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  body.size-sm { font-size: 12px; }
+  body.size-md { font-size: 14px; }
+  body.size-lg { font-size: 16px; }
+
   .update-banner {
     display: flex;
     align-items: center;
@@ -355,6 +359,9 @@ let closedGroups = {};    // group id -> true if user collapsed it
 let expandedHosts = {};   // "groupId/host" -> true if user expanded it
 let currentUpdateInfo = null;
 let updateBannerDismissed = false;
+const FONT_SIZES = ['size-sm', 'size-md', 'size-lg'];
+const FONT_LABELS = ['Aa-', 'Aa', 'Aa+'];
+let fontSizeIndex = 0; // start at small (13px default with no class = between sm and md)
 
 function render(data) {
   rawData = data;
@@ -377,6 +384,9 @@ function saveUIState() {
 function redraw() {
   // Capture UI state before rebuilding DOM
   saveUIState();
+
+  // Preserve font size class
+  document.body.className = FONT_SIZES[fontSizeIndex] || '';
 
   const app = document.getElementById("app");
   const data = rawData;
@@ -416,6 +426,7 @@ function redraw() {
       <div class="filters">
         <button class="filter-btn${hideAcked ? ' active' : ''}" id="btn-ack">Hide Ack</button>
         <button class="filter-btn" id="btn-collapse">Collapse All</button>
+        <button class="filter-btn" id="btn-fontsize">Aa</button>
       </div>
     </div>
     <span class="summary">
@@ -465,6 +476,14 @@ function redraw() {
       closedGroups = {};
       e.target.textContent = 'Collapse All';
     }
+  });
+
+  // Font size toggle
+  document.getElementById('btn-fontsize').addEventListener('click', (e) => {
+    e.stopPropagation();
+    fontSizeIndex = (fontSizeIndex + 1) % FONT_SIZES.length;
+    document.body.className = FONT_SIZES[fontSizeIndex];
+    e.target.textContent = FONT_LABELS[fontSizeIndex];
   });
 
   // State badge toggle handlers
