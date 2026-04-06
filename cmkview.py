@@ -60,6 +60,30 @@ class WindowDelegate(AppKit.NSObject):
         window.makeFirstResponder_(None)
 
 
+class ExternalLinkHandler(AppKit.NSObject):
+    """Open target=_blank and external links in the default browser."""
+
+    def webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(
+        self, webView, configuration, navigationAction, windowFeatures
+    ):
+        # target="_blank" links come here - open in browser
+        url = navigationAction.request().URL()
+        if url:
+            AppKit.NSWorkspace.sharedWorkspace().openURL_(url)
+        return None
+
+    def webView_decidePolicyForNavigationAction_decisionHandler_(
+        self, webView, navigationAction, decisionHandler
+    ):
+        url = navigationAction.request().URL()
+        # Allow file:// and about: URLs (our local HTML), open everything else in browser
+        if url and url.scheme() not in ("file", "about", ""):
+            AppKit.NSWorkspace.sharedWorkspace().openURL_(url)
+            decisionHandler(1)  # WKNavigationActionPolicyCancel
+            return
+        decisionHandler(0)  # WKNavigationActionPolicyAllow
+
+
 class SetupMessageHandler(AppKit.NSObject):
     """Receives login form submissions from the setup WebView."""
 
@@ -105,6 +129,7 @@ class AppDelegate(AppKit.NSObject):
         self._pending_payload = None
         self._poll_timer = None
         self._win_delegate = None
+        self._link_handler = None
         self._mode = None  # "setup" or "dashboard"
         self._update_info = None
         self._update_menu_item = None
@@ -210,6 +235,12 @@ class AppDelegate(AppKit.NSObject):
         wk_view.setAutoresizingMask_(
             AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable
         )
+
+        # Handle external links and target="_blank"
+        self._link_handler = ExternalLinkHandler.alloc().init()
+        wk_view.setUIDelegate_(self._link_handler)
+        wk_view.setNavigationDelegate_(self._link_handler)
+
         return wk_view
 
     def _swap_webview(self, new_view):
