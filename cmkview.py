@@ -154,6 +154,13 @@ class AppDelegate(AppKit.NSObject):
         else:
             self._show_setup()
 
+        # Set Dock icon
+        icon_path = os.path.join(BASE_DIR, "cmkview.icns")
+        if os.path.exists(icon_path):
+            icon = AppKit.NSImage.alloc().initWithContentsOfFile_(icon_path)
+            if icon:
+                AppKit.NSApp.setApplicationIconImage_(icon)
+
     def _setup_main_window(self):
         screen = AppKit.NSScreen.mainScreen().frame()
         w, h = 440, 720

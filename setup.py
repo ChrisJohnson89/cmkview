@@ -7,7 +7,7 @@ DATA_FILES = [("", ["popup.html", "setup.html"])]
 
 OPTIONS = {
     "argv_emulation": False,
-    "iconfile": None,  # Replace with "cmkview.icns" if you have an icon
+    "iconfile": "cmkview.icns",
     "plist": {
         "CFBundleName": "cmkview",
         "CFBundleDisplayName": "cmkview",
