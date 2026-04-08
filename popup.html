@@ -327,6 +327,12 @@
 
   .svc-flags { font-size: 10px; }
 
+  .host-link { cursor: pointer; }
+  .host-link:hover { text-decoration: underline; color: #8fd19e; }
+
+  .svc-clickable { cursor: pointer; border-radius: 4px; padding: 3px 4px; margin: 0 -4px; }
+  .svc-clickable:hover { background: rgba(255,255,255,0.04); }
+
   /* === OK state === */
   .ok-message {
     text-align: center;
@@ -353,6 +359,7 @@
 <script>
 // Global state — survives across data refreshes
 let rawData = null;
+let baseUrl = '';
 let hideAcked = false;
 let hiddenStates = {};    // badge -> true if toggled off (e.g. "DOWN", "CRIT", "WARN", "UNKN")
 let closedGroups = {};    // group id -> true if user collapsed it
@@ -365,7 +372,20 @@ let fontSizeIndex = 0; // start at small (13px default with no class = between s
 
 function render(data) {
   rawData = data;
+  if (data && data.base_url) baseUrl = data.base_url;
   redraw();
+}
+
+function openInCheckmk(host, service, site) {
+  if (!baseUrl) return;
+  let url;
+  if (!service || service === 'Host Status') {
+    url = baseUrl + '/check_mk/view.py?view_name=hoststatus&host=' + encodeURIComponent(host);
+  } else {
+    url = baseUrl + '/check_mk/view.py?view_name=service&host=' + encodeURIComponent(host) + '&service=' + encodeURIComponent(service);
+  }
+  if (site) url += '&site=' + encodeURIComponent(site);
+  window.open(url, '_blank');
 }
 
 function saveUIState() {
@@ -505,7 +525,24 @@ function redraw() {
   app.querySelectorAll('.host-row').forEach(el => {
     el.addEventListener('click', (e) => {
       if (e.target.closest('.service-items')) return;
+      if (e.target.closest('.host-link')) return;
       el.classList.toggle('expanded');
+    });
+  });
+
+  // Click-to-open: host names
+  app.querySelectorAll('.host-link').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openInCheckmk(el.dataset.host, null, el.dataset.site);
+    });
+  });
+
+  // Click-to-open: service items
+  app.querySelectorAll('.svc-clickable').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openInCheckmk(el.dataset.host, el.dataset.service, el.dataset.site);
     });
   });
 }
@@ -594,7 +631,7 @@ function renderGroup(g) {
     const isExpanded = expandedHosts[hkey];
     html += `<div class="host-row${isExpanded ? ' expanded' : ''}" data-hkey="${esc(hkey)}">
       <div class="host-header">
-        <span class="host-name">${esc(host.host)}</span>`;
+        <span class="host-name host-link" data-host="${esc(host.host)}" data-site="${esc(host.site)}">${esc(host.host)}</span>`;
     if (flags) html += `<span class="host-flags">${flags}</span>`;
     html += `<span class="host-meta">${host.problem_count} issue${host.problem_count !== 1 ? 's' : ''} &middot; ${esc(host.worst_duration)}</span>
       </div>
@@ -605,7 +642,7 @@ function renderGroup(g) {
       if (svc.acknowledged) svcFlags += '✓';
       if (svc.downtime) svcFlags += '★';
 
-      html += `<div class="svc-item">
+      html += `<div class="svc-item svc-clickable" data-host="${esc(svc.host)}" data-service="${esc(svc.service)}" data-site="${esc(svc.site)}">
         <span class="svc-badge ${svc.state_badge}">${svc.state_badge}</span>
         <span class="svc-label">${esc(svc.service_label)}</span>
         <span class="svc-msg">${esc(svc.message)}</span>

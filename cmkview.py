@@ -21,6 +21,13 @@ POPUP_HTML_PATH = os.path.join(BASE_DIR, "popup.html")
 SETUP_HTML_PATH = os.path.join(BASE_DIR, "setup.html")
 __version__ = "0.2.0"
 
+SYSTEM_SOUNDS = [
+    "Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero",
+    "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink",
+]
+
+NOTIFY_BADGES = ["DOWN", "CRIT", "WARN", "UNKN"]
+
 STATE_PRIORITY = {
     "DOWN": 0,
     "UNREACHABLE": 0,
@@ -101,6 +108,23 @@ class SetupMessageHandler(AppKit.NSObject):
             self._app_delegate._send_setup_result(False, str(e))
 
 
+class NotificationDelegate(AppKit.NSObject):
+    """Handle clicks on macOS notifications — show the dashboard."""
+
+    _app_delegate = objc.ivar()
+
+    def initWithAppDelegate_(self, delegate):
+        self = objc.super(NotificationDelegate, self).init()
+        if self is None:
+            return None
+        self._app_delegate = delegate
+        return self
+
+    def userNotificationCenter_didActivateNotification_(self, center, notification):
+        if self._app_delegate:
+            self._app_delegate.cmdShowDash_(None)
+
+
 class AppDelegate(AppKit.NSObject):
     def init(self):
         self = objc.super(AppDelegate, self).init()
@@ -122,6 +146,10 @@ class AppDelegate(AppKit.NSObject):
         self._update_info = None
         self._update_menu_item = None
         self._update_check_started = False
+        self._prev_problem_keys = set()
+        self._notify_states = {}  # badge -> bool, loaded from config
+        self._alert_sound = "default"
+        self._notification_delegate = None
         return self
 
     def applicationDidFinishLaunching_(self, notification):
@@ -160,17 +188,74 @@ class AppDelegate(AppKit.NSObject):
             mi.setTarget_(self)
             bar_menu.addItem_(mi)
         bar_menu.addItem_(AppKit.NSMenuItem.separatorItem())
+
+        # --- Notifications submenu ---
+        notify_menu = AppKit.NSMenu.alloc().initWithTitle_("Notifications")
+        for badge in NOTIFY_BADGES:
+            item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                badge, self.cmdToggleNotify_, ""
+            )
+            item.setTarget_(self)
+            item.setRepresentedObject_(badge)
+            notify_menu.addItem_(item)
+        notify_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Notifications", None, ""
+        )
+        notify_item.setSubmenu_(notify_menu)
+        bar_menu.addItem_(notify_item)
+        self._notify_menu = notify_menu
+
+        # --- Alert Sound submenu ---
+        sound_menu = AppKit.NSMenu.alloc().initWithTitle_("Alert Sound")
+        for label in ["None", "Default"]:
+            item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                label, self.cmdSelectSound_, ""
+            )
+            item.setTarget_(self)
+            item.setRepresentedObject_(label.lower())
+            sound_menu.addItem_(item)
+        sound_menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        for snd in SYSTEM_SOUNDS:
+            item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                snd, self.cmdSelectSound_, ""
+            )
+            item.setTarget_(self)
+            item.setRepresentedObject_(snd)
+            sound_menu.addItem_(item)
+        sound_menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        custom_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Custom\u2026", self.cmdSelectCustomSound_, ""
+        )
+        custom_item.setTarget_(self)
+        sound_menu.addItem_(custom_item)
+        sound_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Alert Sound", None, ""
+        )
+        sound_item.setSubmenu_(sound_menu)
+        bar_menu.addItem_(sound_item)
+        self._sound_menu = sound_menu
+
+        bar_menu.addItem_(AppKit.NSMenuItem.separatorItem())
         qi = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Quit", self.cmdQuit_, "q")
         qi.setTarget_(self)
         bar_menu.addItem_(qi)
         self._bar_menu = bar_menu
         self._bar_item.setMenu_(bar_menu)
+        self._sync_menu_checks()
 
         # --- Create window ---
         self._setup_main_window()
 
         # --- Decide: setup or dashboard ---
         self._app_cfg = config.load()
+        self._load_alert_settings()
+
+        # --- Notification center ---
+        self._notification_delegate = NotificationDelegate.alloc().initWithAppDelegate_(self)
+        nc = Foundation.NSClassFromString("NSUserNotificationCenter")
+        if nc:
+            nc.defaultUserNotificationCenter().setDelegate_(self._notification_delegate)
+
         if self._app_cfg.get("url") and self._app_cfg.get("username") and self._app_cfg.get("password"):
             self._start_dashboard()
             self._begin_update_check()
@@ -356,6 +441,7 @@ class AppDelegate(AppKit.NSObject):
         )
 
     def _push_payload(self, payload):
+        payload["base_url"] = self._app_cfg.get("url", "")
         data_json = json.dumps(payload).replace("</", "<\\/")
         js = f"updateProblems({data_json})"
         self._wk_view.evaluateJavaScript_completionHandler_(js, None)
@@ -428,6 +514,140 @@ class AppDelegate(AppKit.NSObject):
     def onPollTimer_(self, timer):
         threading.Thread(target=self._do_poll, daemon=True).start()
 
+    # ── Alert settings ──
+
+    def _load_alert_settings(self):
+        notify_list = self._app_cfg.get("notify", ["CRIT", "DOWN"])
+        self._notify_states = {b: (b in notify_list) for b in NOTIFY_BADGES}
+        self._alert_sound = self._app_cfg.get("alert_sound", "default")
+
+    def _save_alert_settings(self):
+        enabled = [b for b in NOTIFY_BADGES if self._notify_states.get(b)]
+        self._app_cfg["notify"] = enabled
+        self._app_cfg["alert_sound"] = self._alert_sound
+        config.save_full(self._app_cfg)
+
+    def _sync_menu_checks(self):
+        """Update checkmarks on the Notifications and Alert Sound submenus."""
+        if hasattr(self, "_notify_menu") and self._notify_menu:
+            for i in range(self._notify_menu.numberOfItems()):
+                item = self._notify_menu.itemAtIndex_(i)
+                badge = item.representedObject()
+                if badge:
+                    on = self._notify_states.get(badge, False)
+                    item.setState_(AppKit.NSOnState if on else AppKit.NSOffState)
+
+        if hasattr(self, "_sound_menu") and self._sound_menu:
+            current = self._alert_sound or "default"
+            for i in range(self._sound_menu.numberOfItems()):
+                item = self._sound_menu.itemAtIndex_(i)
+                rep = item.representedObject()
+                if rep is not None:
+                    item.setState_(AppKit.NSOnState if rep == current else AppKit.NSOffState)
+                elif item.action() == self.cmdSelectCustomSound_:
+                    # Check if current sound is a custom path
+                    is_custom = (
+                        current not in ("none", "default")
+                        and current not in SYSTEM_SOUNDS
+                    )
+                    item.setState_(AppKit.NSOnState if is_custom else AppKit.NSOffState)
+                    if is_custom:
+                        item.setTitle_(f"Custom: {os.path.basename(current)}")
+                    else:
+                        item.setTitle_("Custom\u2026")
+
+    @objc.typedSelector(b"v@:@")
+    def cmdToggleNotify_(self, sender):
+        badge = sender.representedObject()
+        if badge:
+            self._notify_states[badge] = not self._notify_states.get(badge, False)
+            self._sync_menu_checks()
+            self._save_alert_settings()
+
+    @objc.typedSelector(b"v@:@")
+    def cmdSelectSound_(self, sender):
+        name = sender.representedObject()
+        if name is not None:
+            self._alert_sound = name
+            self._sync_menu_checks()
+            self._save_alert_settings()
+            # Preview the sound
+            if name not in ("none", "default"):
+                self._play_sound(name)
+
+    @objc.typedSelector(b"v@:@")
+    def cmdSelectCustomSound_(self, sender):
+        panel = AppKit.NSOpenPanel.openPanel()
+        panel.setTitle_("Choose Alert Sound")
+        panel.setAllowedFileTypes_(["aiff", "wav", "mp3", "m4a", "caf"])
+        panel.setCanChooseFiles_(True)
+        panel.setCanChooseDirectories_(False)
+        if panel.runModal() == AppKit.NSModalResponseOK:
+            url = panel.URL()
+            if url:
+                path = url.path()
+                self._alert_sound = path
+                self._sync_menu_checks()
+                self._save_alert_settings()
+                self._play_sound(path)
+
+    def _play_sound(self, name):
+        """Play a system sound by name or a custom sound by path."""
+        if not name or name == "none":
+            return
+        if name == "default":
+            AppKit.NSSound.soundNamed_("default").play()
+            return
+        if os.path.isabs(name):
+            snd = AppKit.NSSound.alloc().initWithContentsOfFile_byReference_(name, True)
+        else:
+            snd = AppKit.NSSound.soundNamed_(name)
+        if snd:
+            snd.play()
+
+    # ── Notifications ──
+
+    def _fire_notifications(self, new_problems):
+        """Send macOS notifications for new problems matching enabled severities."""
+        # Filter by enabled notify states
+        notify_problems = []
+        for p in new_problems:
+            badge = STATE_BADGES.get(p.get("state", ""), "")
+            if self._notify_states.get(badge, False):
+                notify_problems.append(p)
+
+        if not notify_problems:
+            return
+
+        nc_class = Foundation.NSClassFromString("NSUserNotificationCenter")
+        if not nc_class:
+            return
+        center = nc_class.defaultUserNotificationCenter()
+
+        if len(notify_problems) <= 3:
+            for p in notify_problems:
+                n = Foundation.NSClassFromString("NSUserNotification").alloc().init()
+                badge = STATE_BADGES.get(p.get("state", ""), p.get("state", ""))
+                n.setTitle_(f"[{badge}] {p.get('host', '')}")
+                svc = p.get("service_label") or p.get("service") or "Host State"
+                n.setSubtitle_(svc)
+                n.setInformativeText_(p.get("message", ""))
+                center.deliverNotification_(n)
+        else:
+            # Grouped summary
+            counts = {}
+            for p in notify_problems:
+                badge = STATE_BADGES.get(p.get("state", ""), "?")
+                counts[badge] = counts.get(badge, 0) + 1
+            summary = ", ".join(f"{v} {k}" for k, v in counts.items())
+            n = Foundation.NSClassFromString("NSUserNotification").alloc().init()
+            n.setTitle_(f"{len(notify_problems)} new problems")
+            n.setInformativeText_(summary)
+            center.deliverNotification_(n)
+
+        # Play alert sound once
+        self._play_sound(self._alert_sound)
+
     # ── Polling ──
 
     def _do_poll(self):
@@ -448,6 +668,22 @@ class AppDelegate(AppKit.NSObject):
         self._bar_item.button().setTitle_(
             "cmkview ✓" if problem_count == 0 else f"cmkview ⚠ {problem_count}"
         )
+
+        # Diff for notifications
+        current_keys = set()
+        problems_by_key = {}
+        for p in self._problems:
+            key = (p.get("site", ""), p.get("host", ""), p.get("service", ""), p.get("state", ""))
+            current_keys.add(key)
+            problems_by_key[key] = p
+
+        new_keys = current_keys - self._prev_problem_keys
+        if new_keys and self._prev_problem_keys:
+            # Only notify after the first poll (skip initial load)
+            new_problems = [problems_by_key[k] for k in new_keys]
+            self._fire_notifications(new_problems)
+        self._prev_problem_keys = current_keys
+
         payload = build_popup_payload(self._problems)
         if self._page_loaded:
             self._push_payload(payload)
