@@ -19,7 +19,7 @@ import updater
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 POPUP_HTML_PATH = os.path.join(BASE_DIR, "popup.html")
 SETUP_HTML_PATH = os.path.join(BASE_DIR, "setup.html")
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 SYSTEM_SOUNDS = [
     "Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero",

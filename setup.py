@@ -12,9 +12,9 @@ OPTIONS = {
         "CFBundleName": "cmkview",
         "CFBundleDisplayName": "cmkview",
         "CFBundleIdentifier": "com.cmkview.app",
-        "CFBundleVersion": "0.1.0",
-        "CFBundleShortVersionString": "0.1.0",
-        "LSUIElement": True,  # Hide from Dock, menu bar only
+        "CFBundleVersion": "0.3.0",
+        "CFBundleShortVersionString": "0.3.0",
+        "LSUIElement": False,
     },
     "packages": ["requests", "certifi"],
     "frameworks": [],
