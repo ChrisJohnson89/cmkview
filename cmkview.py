@@ -303,12 +303,10 @@ class AppDelegate(AppKit.NSObject):
             | AppKit.NSClosableWindowMask
             | AppKit.NSResizableWindowMask
             | AppKit.NSMiniaturizableWindowMask
-            | (1 << 15)  # NSFullSizeContentViewWindowMask
         )
         self._main_window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             rect, style, AppKit.NSBackingStoreBuffered, False
         )
-        self._main_window.setTitlebarAppearsTransparent_(True)
         self._main_window.setTitle_("cmkview")
         self._main_window.setMinSize_(Foundation.NSMakeSize(360, 360))
         self._main_window.setReleasedWhenClosed_(False)
