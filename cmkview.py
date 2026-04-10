@@ -108,8 +108,25 @@ class SetupMessageHandler(AppKit.NSObject):
             self._app_delegate._send_setup_result(False, str(e))
 
 
+class NotificationDelegate(AppKit.NSObject):
+    """Handle clicks on macOS notifications — show the dashboard."""
+
+    _app_delegate = objc.ivar()
+
+    def initWithAppDelegate_(self, delegate):
+        self = objc.super(NotificationDelegate, self).init()
+        if self is None:
+            return None
+        self._app_delegate = delegate
+        return self
+
+    def userNotificationCenter_didActivateNotification_(self, center, notification):
+        if self._app_delegate:
+            self._app_delegate.cmdShowDash_(None)
+
+
 class StatusBarHandler(AppKit.NSObject):
-    """Receives problem count updates from JS to update the menu bar."""
+    """Receives filtered problem count updates from JS to update the menu bar."""
 
     _app_delegate = objc.ivar()
 
@@ -286,10 +303,12 @@ class AppDelegate(AppKit.NSObject):
             | AppKit.NSClosableWindowMask
             | AppKit.NSResizableWindowMask
             | AppKit.NSMiniaturizableWindowMask
+            | (1 << 15)  # NSFullSizeContentViewWindowMask
         )
         self._main_window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             rect, style, AppKit.NSBackingStoreBuffered, False
         )
+        self._main_window.setTitlebarAppearsTransparent_(True)
         self._main_window.setTitle_("cmkview")
         self._main_window.setMinSize_(Foundation.NSMakeSize(360, 360))
         self._main_window.setReleasedWhenClosed_(False)
@@ -672,6 +691,26 @@ class AppDelegate(AppKit.NSObject):
 
     @objc.typedSelector(b"v@:@")
     def onPollSuccess_(self, _obj):
+        problem_count = len(self._problems)
+        self._bar_item.button().setTitle_(
+            "cmkview ✓" if problem_count == 0 else f"cmkview ⚠ {problem_count}"
+        )
+
+        # Diff for notifications
+        current_keys = set()
+        problems_by_key = {}
+        for p in self._problems:
+            key = (p.get("site", ""), p.get("host", ""), p.get("service", ""), p.get("state", ""))
+            current_keys.add(key)
+            problems_by_key[key] = p
+
+        new_keys = current_keys - self._prev_problem_keys
+        if new_keys and self._prev_problem_keys:
+            # Only notify after the first poll (skip initial load)
+            new_problems = [problems_by_key[k] for k in new_keys]
+            self._fire_notifications(new_problems)
+        self._prev_problem_keys = current_keys
+
         payload = build_popup_payload(self._problems)
         if self._page_loaded:
             self._push_payload(payload)
