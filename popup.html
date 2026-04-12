@@ -637,6 +637,7 @@ function redraw() {
   document.getElementById('btn-ack').addEventListener('click', (e) => {
     e.stopPropagation();
     hideAcked = !hideAcked;
+    savePrefs();
     redraw();
   });
 
@@ -665,6 +666,7 @@ function redraw() {
     e.stopPropagation();
     fontSizeIndex = (fontSizeIndex + 1) % FONT_SIZES.length;
     document.body.className = FONT_SIZES[fontSizeIndex];
+    savePrefs();
     redraw();
   });
 
@@ -672,6 +674,7 @@ function redraw() {
   document.getElementById('btn-view').addEventListener('click', (e) => {
     e.stopPropagation();
     viewMode = viewMode === 'grouped' ? 'flat' : 'grouped';
+    savePrefs();
     redraw();
   });
 
@@ -902,6 +905,22 @@ function esc(s) {
   d.textContent = String(s);
   return d.innerHTML;
 }
+
+function savePrefs() {
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.cmkprefs) {
+    window.webkit.messageHandlers.cmkprefs.postMessage(
+      JSON.stringify({ hide_acked: hideAcked, font_size: fontSizeIndex, view_mode: viewMode })
+    );
+  }
+}
+
+window.applyPrefs = function(prefs) {
+  hideAcked = prefs.hide_acked || false;
+  fontSizeIndex = prefs.font_size || 0;
+  viewMode = prefs.view_mode || 'grouped';
+  document.body.className = FONT_SIZES[fontSizeIndex] || '';
+  if (rawData) redraw();
+};
 
 window.updateProblems = render;
 window.showUpdateBanner = function(info) {
