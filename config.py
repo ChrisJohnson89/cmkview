@@ -41,7 +41,6 @@ def load(path: str | None = None) -> dict:
 def save(
     url: str,
     username: str,
-    password: str,
     interval: int = 60,
     notify: list[str] | None = None,
     alert_sound: str = "default",
@@ -60,7 +59,6 @@ def save(
     content = (
         f'url = "{url.rstrip("/")}"\n'
         f'username = "{username}"\n'
-        f'password = "{password}"\n'
         f'interval = {interval}\n'
         f"notify = {notify_toml}\n"
         f'alert_sound = "{alert_sound}"\n'
@@ -82,7 +80,6 @@ def save_full(cfg: dict, path: str | None = None):
     save(
         url=cfg.get("url", ""),
         username=cfg.get("username", ""),
-        password=cfg.get("password", ""),
         interval=cfg.get("interval", 60),
         notify=cfg.get("notify", DEFAULTS["notify"]),
         alert_sound=cfg.get("alert_sound", "default"),

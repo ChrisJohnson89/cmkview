@@ -13,6 +13,7 @@ import objc
 
 import checkmk
 import config
+import keychain
 import updater
 
 
@@ -303,7 +304,7 @@ class AppDelegate(AppKit.NSObject):
         if nc:
             nc.defaultUserNotificationCenter().setDelegate_(self._notification_delegate)
 
-        if self._app_cfg.get("url") and self._app_cfg.get("username") and self._app_cfg.get("password"):
+        if self._has_saved_credentials():
             self._start_dashboard()
             self._begin_update_check()
         else:
@@ -315,6 +316,60 @@ class AppDelegate(AppKit.NSObject):
             icon = AppKit.NSImage.alloc().initWithContentsOfFile_(icon_path)
             if icon:
                 AppKit.NSApp.setApplicationIconImage_(icon)
+
+    def _has_saved_credentials(self):
+        url = self._app_cfg.get("url", "")
+        username = self._app_cfg.get("username", "")
+        if not url or not username:
+            return False
+
+        password = keychain.get_password(url, username)
+        if password:
+            return True
+
+        legacy_password = self._app_cfg.get("password")
+        if not legacy_password:
+            return False
+
+        try:
+            keychain.save_password(url, username, legacy_password)
+            if keychain.get_password(url, username):
+                self._app_cfg.pop("password", None)
+                config.save_full(self._app_cfg)
+                return True
+        except Exception:
+            return True
+
+        return False
+
+    def _get_saved_password(self):
+        url = self._app_cfg.get("url", "")
+        username = self._app_cfg.get("username", "")
+        if not url or not username:
+            return None
+
+        password = keychain.get_password(url, username)
+        if password:
+            if self._app_cfg.get("password"):
+                self._app_cfg.pop("password", None)
+                config.save_full(self._app_cfg)
+            return password
+
+        legacy_password = self._app_cfg.get("password")
+        if not legacy_password:
+            return None
+
+        try:
+            keychain.save_password(url, username, legacy_password)
+            migrated = keychain.get_password(url, username)
+            if migrated:
+                self._app_cfg.pop("password", None)
+                config.save_full(self._app_cfg)
+                return migrated
+        except Exception:
+            return legacy_password
+
+        return legacy_password
 
     def _setup_main_window(self):
         screen = AppKit.NSScreen.mainScreen().frame()
@@ -395,8 +450,8 @@ class AppDelegate(AppKit.NSObject):
         try:
             client = checkmk.CheckMKClient(url, username, password)
             client.login()
-            # Login succeeded — save config
-            config.save(url, username, password)
+            keychain.save_password(url, username, password)
+            config.save(url, username)
             self._app_cfg = config.load()
             self._send_setup_result(True, "")
             # Switch to dashboard on main thread
@@ -451,8 +506,13 @@ class AppDelegate(AppKit.NSObject):
         self._pending_payload = None
         self._main_window.setTitle_("cmkview — CheckMK Monitor")
 
+        password = self._get_saved_password()
+        if not password:
+            self._show_setup()
+            return
+
         self._cmk_client = checkmk.CheckMKClient(
-            self._app_cfg["url"], self._app_cfg["username"], self._app_cfg["password"]
+            self._app_cfg["url"], self._app_cfg["username"], password
         )
 
         wk_view = self._create_webview(with_setup_handler=False)

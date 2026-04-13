@@ -35,22 +35,22 @@ Since the app isn't signed with an Apple Developer certificate, macOS will show 
 
 ## Configuration
 
-On first launch you'll see a setup screen where you enter your CheckMK URL, username, and password. Config is saved to `~/.cmkview.toml`.
+On first launch you'll see a setup screen where you enter your CheckMK URL, username, and password. The password is stored in the macOS Keychain. App settings are saved to `~/.cmkview.toml`.
 
 You can also create or edit the config file manually:
 
 ```toml
 url = "https://mon.example.com/mysite"
 username = "myuser"
-password = "mypassword"
 interval = 60
 ```
+
+Existing installs that still have `password` in `~/.cmkview.toml` are migrated automatically to Keychain on first launch after updating.
 
 | Key        | Required | Default | Description                          |
 |------------|----------|---------|--------------------------------------|
 | `url`      | yes      |         | CheckMK site URL (no trailing slash) |
 | `username` | yes      |         | CheckMK username                     |
-| `password` | yes      |         | CheckMK password                     |
 | `interval` | no       | 60      | Poll interval in seconds             |
 
 ## How it works
