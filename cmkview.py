@@ -147,6 +147,31 @@ class StatusBarHandler(AppKit.NSObject):
             pass
 
 
+class PrefsHandler(AppKit.NSObject):
+    """Receives UI preference changes from JS to persist them."""
+
+    _app_delegate = objc.ivar()
+
+    def initWithDelegate_(self, delegate):
+        self = objc.super(PrefsHandler, self).init()
+        if self is None:
+            return None
+        self._app_delegate = delegate
+        return self
+
+    def userContentController_didReceiveScriptMessage_(self, controller, message):
+        try:
+            data = json.loads(message.body())
+            cfg = self._app_delegate._app_cfg
+            cfg["hide_acked"] = data.get("hide_acked", False)
+            cfg["font_size"] = data.get("font_size", 0)
+            cfg["view_mode"] = data.get("view_mode", "grouped")
+            cfg["hidden_states"] = data.get("hidden_states", {})
+            config.save_full(cfg)
+        except Exception:
+            pass
+
+
 class AppDelegate(AppKit.NSObject):
     def init(self):
         self = objc.super(AppDelegate, self).init()
@@ -263,7 +288,6 @@ class AppDelegate(AppKit.NSObject):
         bar_menu.addItem_(qi)
         self._bar_menu = bar_menu
         self._bar_item.setMenu_(bar_menu)
-        self._sync_menu_checks()
 
         # --- Create window ---
         self._setup_main_window()
@@ -271,6 +295,7 @@ class AppDelegate(AppKit.NSObject):
         # --- Decide: setup or dashboard ---
         self._app_cfg = config.load()
         self._load_alert_settings()
+        self._sync_menu_checks()
 
         # --- Notification center ---
         self._notification_delegate = NotificationDelegate.alloc().initWithAppDelegate_(self)
@@ -327,6 +352,8 @@ class AppDelegate(AppKit.NSObject):
         else:
             sb_handler = StatusBarHandler.alloc().initWithDelegate_(self)
             wk_conf.userContentController().addScriptMessageHandler_name_(sb_handler, "cmkstatus")
+            prefs_handler = PrefsHandler.alloc().initWithDelegate_(self)
+            wk_conf.userContentController().addScriptMessageHandler_name_(prefs_handler, "cmkprefs")
 
         frame = self._main_window.contentView().bounds()
         wk_view = WebKit.WKWebView.alloc().initWithFrame_configuration_(frame, wk_conf)
@@ -457,12 +484,24 @@ class AppDelegate(AppKit.NSObject):
             if result and not self._page_loaded:
                 self._page_loaded = True
                 timer.invalidate()
+                self._push_prefs()
                 if self._pending_payload is not None:
                     self._push_payload(self._pending_payload)
                 if self._update_info is not None:
                     self._push_update_banner(self._update_info)
         self._wk_view.evaluateJavaScript_completionHandler_(
             "typeof updateProblems === 'function'", callback
+        )
+
+    def _push_prefs(self):
+        prefs = json.dumps({
+            "hide_acked": self._app_cfg.get("hide_acked", False),
+            "font_size": self._app_cfg.get("font_size", 0),
+            "view_mode": self._app_cfg.get("view_mode", "grouped"),
+            "hidden_states": self._app_cfg.get("hidden_states", {}),
+        })
+        self._wk_view.evaluateJavaScript_completionHandler_(
+            f"applyPrefs({prefs})", None
         )
 
     def _push_payload(self, payload):
