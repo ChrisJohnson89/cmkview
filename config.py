@@ -7,7 +7,7 @@ import tomllib
 DEFAULT_PATH = os.path.expanduser("~/.cmkview.toml")
 
 DEFAULTS = {
-    "interval": 60,
+    "interval": 30,
     "notify": ["CRIT", "DOWN"],
     "alert_sound": "default",
     "hide_acked": False,
@@ -41,7 +41,7 @@ def load(path: str | None = None) -> dict:
 def save(
     url: str,
     username: str,
-    interval: int = 60,
+    interval: int = 30,
     notify: list[str] | None = None,
     alert_sound: str = "default",
     hide_acked: bool = False,
@@ -80,7 +80,7 @@ def save_full(cfg: dict, path: str | None = None):
     save(
         url=cfg.get("url", ""),
         username=cfg.get("username", ""),
-        interval=cfg.get("interval", 60),
+        interval=cfg.get("interval", 30),
         notify=cfg.get("notify", DEFAULTS["notify"]),
         alert_sound=cfg.get("alert_sound", "default"),
         hide_acked=cfg.get("hide_acked", False),

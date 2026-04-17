@@ -9,6 +9,7 @@ import ast
 import datetime as dt
 import html as html_mod
 import re
+import time
 
 import requests
 
@@ -16,6 +17,7 @@ import requests
 # States that count as "problems"
 HOST_PROBLEM_STATES = {"DOWN", "UNREACH", "UNREACHABLE"}
 SVC_PROBLEM_STATES = {"WARN", "WARNING", "CRIT", "CRITICAL", "UNKN", "UNKNOWN"}
+REQUEST_TIMEOUT = 15
 
 # Display labels
 STATEMAP = {
@@ -171,8 +173,23 @@ class CheckMKClient:
         self.url = url.rstrip("/")
         self.username = username
         self.password = password
-        self.session = requests.Session()
-        self.session.verify = True
+        self.session = self._build_session()
+        self._logged_in = False
+
+    def _build_session(self) -> requests.Session:
+        session = requests.Session()
+        session.verify = True
+        session.headers.update(
+            {
+                "Cache-Control": "no-cache, no-store, max-age=0",
+                "Pragma": "no-cache",
+            }
+        )
+        return session
+
+    def reset_session(self):
+        self.session.close()
+        self.session = self._build_session()
         self._logged_in = False
 
     def login(self):
@@ -184,6 +201,7 @@ class CheckMKClient:
                 "_login": "1",
                 "_origtarget": "",
             },
+            timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
         cookies = self.session.cookies.get_dict()
@@ -203,14 +221,24 @@ class CheckMKClient:
             "output_format": "python",
             "lang": "",
             "limit": "hard",
+            "_ts": str(time.time_ns()),
         }
         if extra_params:
             params.update(extra_params)
 
-        r = self.session.get(f"{self.url}/check_mk/view.py", params=params)
+        r = self.session.get(
+            f"{self.url}/check_mk/view.py",
+            params=params,
+            timeout=REQUEST_TIMEOUT,
+        )
         if r.status_code == 401 or "login" in r.url:
             self.login()
-            r = self.session.get(f"{self.url}/check_mk/view.py", params=params)
+            params["_ts"] = str(time.time_ns())
+            r = self.session.get(
+                f"{self.url}/check_mk/view.py",
+                params=params,
+                timeout=REQUEST_TIMEOUT,
+            )
         r.raise_for_status()
 
         try:

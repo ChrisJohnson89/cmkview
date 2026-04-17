@@ -198,6 +198,12 @@ class AppDelegate(AppKit.NSObject):
         self._notify_states = {}  # badge -> bool, loaded from config
         self._alert_sound = "default"
         self._notification_delegate = None
+        self._poll_lock = threading.Lock()
+        self._poll_in_flight = False
+        self._poll_pending = False
+        self._pending_reset_session = False
+        self._poll_seq = 0
+        self._latest_applied_poll_seq = 0
         return self
 
     def applicationDidFinishLaunching_(self, notification):
@@ -504,6 +510,7 @@ class AppDelegate(AppKit.NSObject):
         self._mode = "dashboard"
         self._page_loaded = False
         self._pending_payload = None
+        self._reset_poll_state()
         self._main_window.setTitle_("cmkview — CheckMK Monitor")
 
         password = self._get_saved_password()
@@ -536,7 +543,7 @@ class AppDelegate(AppKit.NSObject):
         self._poll_timer = Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             interval, self, self.onPollTimer_, None, True
         )
-        threading.Thread(target=self._do_poll, daemon=True).start()
+        self._request_poll(reset_session=True)
 
     @objc.typedSelector(b"v@:@")
     def checkPageReady_(self, timer):
@@ -617,7 +624,7 @@ class AppDelegate(AppKit.NSObject):
     @objc.typedSelector(b"v@:@")
     def cmdRefresh_(self, sender):
         if self._mode == "dashboard":
-            threading.Thread(target=self._do_poll, daemon=True).start()
+            self._start_dashboard()
 
     @objc.typedSelector(b"v@:@")
     def cmdOpenUpdate_(self, sender):
@@ -636,7 +643,7 @@ class AppDelegate(AppKit.NSObject):
 
     @objc.typedSelector(b"v@:@")
     def onPollTimer_(self, timer):
-        threading.Thread(target=self._do_poll, daemon=True).start()
+        self._request_poll(reset_session=True)
 
     # ── Alert settings ──
 
@@ -774,49 +781,115 @@ class AppDelegate(AppKit.NSObject):
 
     # ── Polling ──
 
-    def _do_poll(self):
+    def _reset_poll_state(self):
+        with self._poll_lock:
+            self._poll_in_flight = False
+            self._poll_pending = False
+            self._pending_reset_session = False
+            self._poll_seq = 0
+            self._latest_applied_poll_seq = 0
+
+    def _request_poll(self, reset_session=False):
+        if self._cmk_client is None:
+            return
+
+        with self._poll_lock:
+            if self._poll_in_flight:
+                self._poll_pending = True
+                self._pending_reset_session = self._pending_reset_session or reset_session
+                return
+
+            self._poll_in_flight = True
+            self._poll_seq += 1
+            poll_seq = self._poll_seq
+
+        threading.Thread(
+            target=self._do_poll,
+            args=(poll_seq, reset_session),
+            daemon=True,
+        ).start()
+
+    def _finish_poll(self):
+        with self._poll_lock:
+            if self._poll_pending:
+                reset_session = self._pending_reset_session
+                self._poll_pending = False
+                self._pending_reset_session = False
+                self._poll_seq += 1
+                poll_seq = self._poll_seq
+            else:
+                self._poll_in_flight = False
+                return
+
+        threading.Thread(
+            target=self._do_poll,
+            args=(poll_seq, reset_session),
+            daemon=True,
+        ).start()
+
+    def _do_poll(self, poll_seq, reset_session=False):
         try:
-            self._problems = self._cmk_client.fetch_all_problems()
+            if reset_session:
+                self._cmk_client.reset_session()
+            problems = self._cmk_client.fetch_all_problems()
             self.performSelectorOnMainThread_withObject_waitUntilDone_(
-                self.onPollSuccess_, None, False
+                self.onPollSuccess_,
+                {"poll_seq": poll_seq, "problems": problems},
+                False,
             )
         except Exception as e:
             print(f"Poll error: {e}")
             self.performSelectorOnMainThread_withObject_waitUntilDone_(
-                self.onPollError_, None, False
+                self.onPollError_,
+                {"poll_seq": poll_seq, "error": str(e)},
+                False,
             )
 
     @objc.typedSelector(b"v@:@")
-    def onPollSuccess_(self, _obj):
-        problem_count = len(self._problems)
-        self._bar_item.button().setTitle_(
-            "cmkview ✓" if problem_count == 0 else f"cmkview ⚠ {problem_count}"
-        )
+    def onPollSuccess_(self, payload):
+        try:
+            poll_seq = int(payload.get("poll_seq", 0))
+            problems = payload.get("problems", [])
+            if poll_seq < self._latest_applied_poll_seq:
+                return
 
-        # Diff for notifications
-        current_keys = set()
-        problems_by_key = {}
-        for p in self._problems:
-            key = (p.get("site", ""), p.get("host", ""), p.get("service", ""), p.get("state", ""))
-            current_keys.add(key)
-            problems_by_key[key] = p
+            self._latest_applied_poll_seq = poll_seq
+            self._problems = problems
 
-        new_keys = current_keys - self._prev_problem_keys
-        if new_keys and self._prev_problem_keys:
-            # Only notify after the first poll (skip initial load)
-            new_problems = [problems_by_key[k] for k in new_keys]
-            self._fire_notifications(new_problems)
-        self._prev_problem_keys = current_keys
+            problem_count = len(self._problems)
+            self._bar_item.button().setTitle_(
+                "cmkview ✓" if problem_count == 0 else f"cmkview ⚠ {problem_count}"
+            )
 
-        payload = build_popup_payload(self._problems)
-        if self._page_loaded:
-            self._push_payload(payload)
-        else:
-            self._pending_payload = payload
+            # Diff for notifications
+            current_keys = set()
+            problems_by_key = {}
+            for p in self._problems:
+                key = (p.get("site", ""), p.get("host", ""), p.get("service", ""), p.get("state", ""))
+                current_keys.add(key)
+                problems_by_key[key] = p
+
+            new_keys = current_keys - self._prev_problem_keys
+            if new_keys and self._prev_problem_keys:
+                # Only notify after the first poll (skip initial load)
+                new_problems = [problems_by_key[k] for k in new_keys]
+                self._fire_notifications(new_problems)
+            self._prev_problem_keys = current_keys
+
+            payload = build_popup_payload(self._problems)
+            if self._page_loaded:
+                self._push_payload(payload)
+            else:
+                self._pending_payload = payload
+        finally:
+            self._finish_poll()
 
     @objc.typedSelector(b"v@:@")
-    def onPollError_(self, _obj):
-        self._bar_item.button().setTitle_("cmkview ✗")
+    def onPollError_(self, payload):
+        try:
+            self._bar_item.button().setTitle_("cmkview ✗")
+        finally:
+            self._finish_poll()
 
     @objc.typedSelector(b"v@:@")
     def onUpdateCheckComplete_(self, _obj):
